@@ -13,8 +13,9 @@ document.addEventListener('DOMContentLoaded', () => {
     const message = userInput.value.trim();
     if (!message) return;
     
-    // Add user message to chat immediately
-    addMessage('user', message);
+    // Add user message to chat immediately with a visible style
+    const userMessageId = addMessage('user', message);
+    console.log('Added user message with ID:', userMessageId);
     
     // Clear input
     userInput.value = '';
@@ -69,8 +70,16 @@ document.addEventListener('DOMContentLoaded', () => {
       </div>
     `;
     
+    // Make sure the message is visible
+    messageDiv.style.display = 'flex';
+    
+    // Add to chat
     chatMessages.appendChild(messageDiv);
     chatMessages.scrollTop = chatMessages.scrollHeight;
+    
+    // Debug
+    console.log(`Added ${role} message:`, content);
+    
     return messageId;
   }
   

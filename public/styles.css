@@ -40,7 +40,8 @@ body {
 
 .message {
   margin-bottom: 15px;
-  display: flex;
+  display: flex !important; /* Force display */
+  width: 100%;
 }
 
 .user {
@@ -57,11 +58,13 @@ body {
 .user .message-content {
   background-color: #407874;
   color: white;
+  display: inline-block; /* Ensure content is visible */
 }
 
 .assistant .message-content {
   background-color: #e5e5ea;
   color: black;
+  display: inline-block; /* Ensure content is visible */
 }
 
 .chat-input {
