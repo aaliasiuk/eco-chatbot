@@ -4,6 +4,7 @@ const Anthropic = require('@anthropic-ai/sdk');
 const path = require('path');
 const { findLocationsByZipCode } = require('./location-service');
 const { initializeKnowledgeBase, searchRelevantDocuments } = require('./website-knowledge');
+const { getDeviceEstimate, extractDeviceInfo } = require('./device-estimate-service');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -17,12 +18,21 @@ const anthropic = new Anthropic({
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
+// API Routes
+const apiRoutes = require('./api-routes');
+app.use('/api', apiRoutes);
+
 // Store conversation history (in memory - would use a database in production)
 const conversations = {};
 
 // Keywords that indicate user is looking for locations
 const locationKeywords = [
   'location', 'kiosk', 'near', 'nearby', 'closest', 'nearest', 'find', 'where', 'atm'
+];
+
+// Keywords that indicate user is asking for a price estimate
+const estimateKeywords = [
+  'worth', 'value', 'price', 'estimate', 'offer', 'quote', 'much', 'pay', 'get', 'sell'
 ];
 
 // API endpoint for chat
@@ -35,7 +45,8 @@ app.post('/api/chat', async (req, res) => {
       conversations[conversationId] = {
         systemPrompt: "You are a helpful customer support assistant for ecoATM, a company that offers automated kiosks that buy back used cell phones and other electronic devices for cash. Be friendly, concise, and helpful. Base your answers on the information provided in the context. If you don't know something or if the information isn't in the provided context, say so politely.",
         messages: [],
-        awaitingZipCode: false
+        awaitingZipCode: false,
+        awaitingDeviceInfo: false
       };
     }
     
@@ -101,32 +112,76 @@ app.post('/api/chat', async (req, res) => {
         // Set the awaiting zip code flag
         conversations[conversationId].awaitingZipCode = true;
       } else {
-        // Regular query - search for relevant documents
-        const relevantDocs = searchRelevantDocuments(message, 3);
+        // Check if this is a device estimate query
+        const isEstimateQuery = estimateKeywords.some(keyword => 
+          message.toLowerCase().includes(keyword)
+        ) && (
+          message.toLowerCase().includes('phone') || 
+          message.toLowerCase().includes('iphone') || 
+          message.toLowerCase().includes('samsung') || 
+          message.toLowerCase().includes('device')
+        );
         
-        // Create context from relevant documents
-        let context = "";
-        if (relevantDocs.length > 0) {
-          context = "Here is information from ecoATM's website that may help answer the question:\n\n" +
-            relevantDocs.map(doc => `From ${doc.source}:\n${doc.content}`).join('\n\n') +
-            "\n\nPlease use this information to answer the user's question.";
+        if (isEstimateQuery || conversations[conversationId].awaitingDeviceInfo) {
+          try {
+            // Try to extract device info from the message
+            const deviceInfo = extractDeviceInfo(message);
+            
+            if (deviceInfo) {
+              // We have enough info to get an estimate
+              const estimate = await getDeviceEstimate(deviceInfo);
+              
+              if (estimate && estimate.offer) {
+                reply = `Based on the information provided, your ${deviceInfo.brandName} ${deviceInfo.modelName} (${deviceInfo.storageOption}, ${deviceInfo.carrierName}) is estimated to be worth ${estimate.offer}. This is an estimate for a device that powers on, has no screen damage, and no cracks. The actual offer may vary based on the condition of your device when assessed at an ecoATM kiosk.`;
+              } else {
+                reply = "I'm sorry, I couldn't get an estimate for that device. Please check that the device information is correct or try a different device.";
+              }
+              
+              // Reset the awaiting device info flag
+              conversations[conversationId].awaitingDeviceInfo = false;
+            } else if (conversations[conversationId].awaitingDeviceInfo) {
+              // Still waiting for device info but couldn't extract it
+              reply = "I'm still having trouble understanding which device you want to get an estimate for. Please provide the brand (like Apple, Samsung), model (like iPhone 13, Galaxy S21), storage size (like 128GB), and carrier (like Verizon, AT&T).";
+            } else {
+              // First time asking, but not enough info
+              reply = "I'd be happy to give you an estimate for your device! To provide an accurate estimate, I need to know the brand (like Apple, Samsung), model (like iPhone 13, Galaxy S21), storage size (like 128GB), and carrier (like Verizon, AT&T). Could you please provide these details?";
+              
+              // Set the awaiting device info flag
+              conversations[conversationId].awaitingDeviceInfo = true;
+            }
+          } catch (error) {
+            console.error('Error getting device estimate:', error);
+            reply = "I'm sorry, I encountered an error while trying to get an estimate for your device. Please try again later.";
+            conversations[conversationId].awaitingDeviceInfo = false;
+          }
+        } else {
+          // Regular query - search for relevant documents
+          const relevantDocs = searchRelevantDocuments(message, 3);
+          
+          // Create context from relevant documents
+          let context = "";
+          if (relevantDocs.length > 0) {
+            context = "Here is information from ecoATM's website that may help answer the question:\n\n" +
+              relevantDocs.map(doc => `From ${doc.source}:\n${doc.content}`).join('\n\n') +
+              "\n\nPlease use this information to answer the user's question.";
+          }
+          
+          // Format messages for Anthropic API
+          const formattedMessages = conversations[conversationId].messages.map(msg => ({
+            role: msg.role,
+            content: msg.content
+          }));
+          
+          // Get response from Anthropic
+          const completion = await anthropic.messages.create({
+            model: "claude-3-7-sonnet-20250219",
+            system: conversations[conversationId].systemPrompt + (context ? "\n\n" + context : ""),
+            messages: formattedMessages,
+            max_tokens: 500
+          });
+          
+          reply = completion.content[0].text;
         }
-        
-        // Format messages for Anthropic API
-        const formattedMessages = conversations[conversationId].messages.map(msg => ({
-          role: msg.role,
-          content: msg.content
-        }));
-        
-        // Get response from Anthropic
-        const completion = await anthropic.messages.create({
-          model: "claude-3-7-sonnet-20250219",
-          system: conversations[conversationId].systemPrompt + (context ? "\n\n" + context : ""),
-          messages: formattedMessages,
-          max_tokens: 500
-        });
-        
-        reply = completion.content[0].text;
       }
     }
     
