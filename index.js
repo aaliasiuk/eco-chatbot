@@ -4,7 +4,7 @@ const Anthropic = require('@anthropic-ai/sdk');
 const path = require('path');
 const { findLocationsByZipCode } = require('./location-service');
 const { initializeKnowledgeBase, searchRelevantDocuments } = require('./website-knowledge');
-const { getDeviceEstimate, extractDeviceInfo } = require('./device-estimate-service');
+const { getDeviceEstimate, extractDeviceInfo, isDeviceInfoComplete, getMissingInfoMessage, updateDeviceInfo } = require('./device-estimate-service');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -92,20 +92,25 @@ app.post('/api/chat', async (req, res) => {
       reply = "To find ecoATM locations near you, I'll need your zip code. Please enter your 5-digit zip code.";
     } else {
       // Check if this is a location-related query or a response to a location question
-      const isLocationQuery = locationKeywords.some(keyword => 
-        message.toLowerCase().includes(keyword)
-      );
+      const isLocationQuery = locationKeywords.some(keyword => {
+        // Check if the keyword is a standalone word, not part of another word
+        const regex = new RegExp(`\\b${keyword}\\b`, 'i');
+        return regex.test(message);
+      });
       
-      const lastMessage = conversations[conversationId].messages.length > 0 ? 
-        conversations[conversationId].messages[conversations[conversationId].messages.length - 1] : null;
+      const lastMessage = conversations[conversationId].messages.length > 1 ? 
+        conversations[conversationId].messages[conversations[conversationId].messages.length - 2] : null;
       
       const previouslyAskedAboutLocation = lastMessage && 
         lastMessage.role === 'assistant' && 
         lastMessage.content.includes('nearest ecoATM location');
       
-      const isAffirmativeResponse = /^(yes|yeah|yep|sure|ok|okay|find|show)/i.test(message.trim());
+      const isAffirmativeResponse = /^(yes|yeah|yep|sure|ok|okay|find|show)$/i.test(message.trim());
       
-      if ((isLocationQuery || (previouslyAskedAboutLocation && isAffirmativeResponse)) && !zipCodeMatch) {
+      // Check if this is a "what is" question about ecoATM
+      const isWhatIsQuestion = /what\s+is\s+(?:an\s+)?ecoatm/i.test(message);
+      
+      if (!isWhatIsQuestion && (isLocationQuery || (previouslyAskedAboutLocation && isAffirmativeResponse)) && !zipCodeMatch) {
         // This is a location query but no zip code provided
         reply = "I'd be happy to help you find the nearest ecoATM kiosk! To locate the closest kiosk to you, I'll need your zip code. Please enter your 5-digit zip code.";
         
@@ -125,25 +130,45 @@ app.post('/api/chat', async (req, res) => {
         if (isEstimateQuery || conversations[conversationId].awaitingDeviceInfo) {
           try {
             // Try to extract device info from the message
-            const deviceInfo = extractDeviceInfo(message);
+            let deviceInfo = extractDeviceInfo(message);
+            
+            // If we already have partial info stored, update it with any new info
+            if (conversations[conversationId].partialDeviceInfo && deviceInfo) {
+              deviceInfo = updateDeviceInfo(conversations[conversationId].partialDeviceInfo, deviceInfo);
+            } else if (conversations[conversationId].partialDeviceInfo) {
+              deviceInfo = conversations[conversationId].partialDeviceInfo;
+            }
             
             if (deviceInfo) {
-              // We have enough info to get an estimate
-              const estimate = await getDeviceEstimate(deviceInfo);
-              
-              if (estimate && estimate.offer) {
-                reply = `Based on the information provided, your ${deviceInfo.brandName} ${deviceInfo.modelName} (${deviceInfo.storageOption}, ${deviceInfo.carrierName}) is estimated to be worth ${estimate.offer}. This is an estimate for a device that powers on, has no screen damage, and no cracks. The actual offer may vary based on the condition of your device when assessed at an ecoATM kiosk.`;
+              // Check if we have all the required information
+              if (isDeviceInfoComplete(deviceInfo)) {
+                // We have all the info, get an estimate
+                const estimate = await getDeviceEstimate(deviceInfo);
+                
+                if (estimate && estimate.offer) {
+                  reply = `Based on the information provided, your ${deviceInfo.brandName} ${deviceInfo.modelName} (${deviceInfo.storageOption}, ${deviceInfo.carrierName}) is estimated to be worth ${estimate.offer}. This is an estimate for a device that powers on, has no screen damage, and no cracks. The actual offer may vary based on the condition of your device when assessed at an ecoATM kiosk.`;
+                  
+                  // Clear the stored device info and flags
+                  delete conversations[conversationId].partialDeviceInfo;
+                  conversations[conversationId].awaitingDeviceInfo = false;
+                } else {
+                  reply = "I'm sorry, I couldn't get an estimate for that device. Please check that the device information is correct or try a different device.";
+                  delete conversations[conversationId].partialDeviceInfo;
+                  conversations[conversationId].awaitingDeviceInfo = false;
+                }
               } else {
-                reply = "I'm sorry, I couldn't get an estimate for that device. Please check that the device information is correct or try a different device.";
+                // We're missing some info, ask for it
+                reply = getMissingInfoMessage(deviceInfo);
+                
+                // Store the partial info we have
+                conversations[conversationId].partialDeviceInfo = deviceInfo;
+                conversations[conversationId].awaitingDeviceInfo = true;
               }
-              
-              // Reset the awaiting device info flag
-              conversations[conversationId].awaitingDeviceInfo = false;
             } else if (conversations[conversationId].awaitingDeviceInfo) {
-              // Still waiting for device info but couldn't extract it
+              // Still waiting for device info but couldn't extract anything useful
               reply = "I'm still having trouble understanding which device you want to get an estimate for. Please provide the brand (like Apple, Samsung), model (like iPhone 13, Galaxy S21), storage size (like 128GB), and carrier (like Verizon, AT&T).";
             } else {
-              // First time asking, but not enough info
+              // First time asking, but couldn't extract any device info
               reply = "I'd be happy to give you an estimate for your device! To provide an accurate estimate, I need to know the brand (like Apple, Samsung), model (like iPhone 13, Galaxy S21), storage size (like 128GB), and carrier (like Verizon, AT&T). Could you please provide these details?";
               
               // Set the awaiting device info flag
@@ -153,6 +178,7 @@ app.post('/api/chat', async (req, res) => {
             console.error('Error getting device estimate:', error);
             reply = "I'm sorry, I encountered an error while trying to get an estimate for your device. Please try again later.";
             conversations[conversationId].awaitingDeviceInfo = false;
+            delete conversations[conversationId].partialDeviceInfo;
           }
         } else {
           // Regular query - search for relevant documents

@@ -13,15 +13,11 @@ document.addEventListener('DOMContentLoaded', () => {
     const message = userInput.value.trim();
     if (!message) return;
     
-    // Add user message to chat immediately with a visible style
-    const userMessageId = addMessage('user', message);
-    console.log('Added user message with ID:', userMessageId);
+    // Display user message first
+    displayUserMessage(message);
     
     // Clear input
     userInput.value = '';
-    
-    // Show loading indicator
-    const loadingId = addMessage('assistant', '...');
     
     try {
       // Send message to server
@@ -45,24 +41,22 @@ document.addEventListener('DOMContentLoaded', () => {
       // Update conversation ID
       conversationId = data.conversationId;
       
-      // Replace loading indicator with actual response
-      updateMessage(loadingId, data.reply);
+      // Display bot response
+      displayBotMessage(data.reply);
       
     } catch (error) {
       console.error('Error:', error);
-      updateMessage(loadingId, 'Sorry, something went wrong. Please try again.');
+      displayBotMessage('Sorry, something went wrong. Please try again.');
     }
   });
   
-  // Function to add a message to the chat
-  function addMessage(role, content) {
-    const messageId = Date.now();
+  // Function to display user message
+  function displayUserMessage(message) {
     const messageDiv = document.createElement('div');
-    messageDiv.className = `message ${role}`;
-    messageDiv.id = `msg-${messageId}`;
+    messageDiv.className = 'message user';
     
     // Handle line breaks
-    const formattedContent = content.replace(/\n/g, '<br>');
+    const formattedContent = message.replace(/\n/g, '<br>');
     
     messageDiv.innerHTML = `
       <div class="message-content">
@@ -70,27 +64,25 @@ document.addEventListener('DOMContentLoaded', () => {
       </div>
     `;
     
-    // Make sure the message is visible
-    messageDiv.style.display = 'flex';
-    
-    // Add to chat
     chatMessages.appendChild(messageDiv);
     chatMessages.scrollTop = chatMessages.scrollHeight;
-    
-    // Debug
-    console.log(`Added ${role} message:`, content);
-    
-    return messageId;
   }
   
-  // Function to update a message
-  function updateMessage(id, content) {
-    const messageDiv = document.getElementById(`msg-${id}`);
-    if (messageDiv) {
-      // Handle line breaks
-      const formattedContent = content.replace(/\n/g, '<br>');
-      messageDiv.querySelector('.message-content').innerHTML = formattedContent;
-      chatMessages.scrollTop = chatMessages.scrollHeight;
-    }
+  // Function to display bot message
+  function displayBotMessage(message) {
+    const messageDiv = document.createElement('div');
+    messageDiv.className = 'message assistant';
+    
+    // Handle line breaks
+    const formattedContent = message.replace(/\n/g, '<br>');
+    
+    messageDiv.innerHTML = `
+      <div class="message-content">
+        ${formattedContent}
+      </div>
+    `;
+    
+    chatMessages.appendChild(messageDiv);
+    chatMessages.scrollTop = chatMessages.scrollHeight;
   }
 });

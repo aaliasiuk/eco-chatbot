@@ -70,7 +70,7 @@ async function getDeviceEstimate(deviceInfo) {
 /**
  * Extract device information from user message
  * @param {string} message - User message
- * @returns {Object|null} - Extracted device info or null if not enough info
+ * @returns {Object} - Extracted device info with missing fields marked
  */
 function extractDeviceInfo(message) {
   // Simple extraction logic - in production, use NLP or more sophisticated parsing
@@ -82,34 +82,123 @@ function extractDeviceInfo(message) {
   const storageMatch = message.match(storageRegex);
   const carrierMatch = message.match(carrierRegex);
   
-  if (!modelMatch) return null;
+  // Create result object
+  const result = {};
   
-  const brandMap = {
-    'iphone': 'Apple',
-    'galaxy': 'Samsung',
-    'pixel': 'Google'
+  // Extract model and brand if available
+  if (modelMatch) {
+    const brandMap = {
+      'iphone': 'Apple',
+      'galaxy': 'Samsung',
+      'pixel': 'Google'
+    };
+    
+    const brandName = brandMap[modelMatch[1].toLowerCase()] || 'Unknown';
+    let modelName = `${modelMatch[1].charAt(0).toUpperCase() + modelMatch[1].slice(1).toLowerCase()} ${modelMatch[2]}`;
+    
+    if (modelMatch[3]) modelName += modelMatch[3]; // Add "Pro" if present
+    if (modelMatch[4]) modelName += modelMatch[4]; // Add "Max" if present
+    
+    result.modelName = modelName;
+    result.seriesName = modelName;
+    result.brandName = brandName;
+  }
+  
+  // Extract storage if available
+  if (storageMatch) {
+    result.storageOption = `${storageMatch[1]}${storageMatch[2].toUpperCase()}`;
+  }
+  
+  // Extract carrier if available
+  if (carrierMatch) {
+    result.carrierName = carrierMatch[1].charAt(0).toUpperCase() + carrierMatch[1].slice(1).toLowerCase();
+  }
+  
+  // If we have at least one piece of information, return the result
+  if (Object.keys(result).length > 0) {
+    result.missingInfo = {
+      storage: !result.storageOption,
+      carrier: !result.carrierName,
+      model: !result.modelName
+    };
+    return result;
+  }
+  
+  // If we couldn't extract anything, return null
+  return null;
+}
+
+/**
+ * Check if device info is complete
+ * @param {Object} deviceInfo - Device information object
+ * @returns {boolean} - Whether all required info is present
+ */
+function isDeviceInfoComplete(deviceInfo) {
+  return deviceInfo && 
+         deviceInfo.modelName && 
+         deviceInfo.brandName && 
+         deviceInfo.storageOption && 
+         deviceInfo.carrierName;
+}
+
+/**
+ * Get missing information message
+ * @param {Object} deviceInfo - Device information object
+ * @returns {string} - Message asking for missing information
+ */
+function getMissingInfoMessage(deviceInfo) {
+  const missingFields = [];
+  
+  if (!deviceInfo.storageOption) {
+    missingFields.push("storage capacity (e.g., 128GB, 256GB)");
+  }
+  
+  if (!deviceInfo.carrierName) {
+    missingFields.push("carrier (e.g., Verizon, AT&T, T-Mobile, or Unlocked)");
+  }
+  
+  const deviceDesc = `${deviceInfo.brandName} ${deviceInfo.modelName}`;
+  
+  if (missingFields.length === 0) {
+    return null;
+  } else if (missingFields.length === 1) {
+    return `To provide an accurate estimate for your ${deviceDesc}, I need to know the ${missingFields[0]}. Could you please provide this information?`;
+  } else {
+    return `To provide an accurate estimate for your ${deviceDesc}, I need to know the ${missingFields.join(' and ')}. Could you please provide this information?`;
+  }
+}
+
+/**
+ * Update device info with new information from user message
+ * @param {Object} existingInfo - Previously stored device info
+ * @param {Object} newInfo - Newly extracted device info
+ * @returns {Object} - Updated device info
+ */
+function updateDeviceInfo(existingInfo, newInfo) {
+  if (!existingInfo) return newInfo;
+  if (!newInfo) return existingInfo;
+  
+  const updated = {
+    modelName: newInfo.modelName || existingInfo.modelName,
+    seriesName: newInfo.seriesName || existingInfo.seriesName,
+    brandName: newInfo.brandName || existingInfo.brandName,
+    storageOption: newInfo.storageOption || existingInfo.storageOption,
+    carrierName: newInfo.carrierName || existingInfo.carrierName
   };
   
-  const brandName = brandMap[modelMatch[1].toLowerCase()] || 'Unknown';
-  let modelName = `${modelMatch[1].charAt(0).toUpperCase() + modelMatch[1].slice(1).toLowerCase()} ${modelMatch[2]}`;
-  
-  if (modelMatch[3]) modelName += modelMatch[3]; // Add "Pro" if present
-  if (modelMatch[4]) modelName += modelMatch[4]; // Add "Max" if present
-  
-  const seriesName = modelName;
-  const storageOption = storageMatch ? `${storageMatch[1]}${storageMatch[2].toUpperCase()}` : "128GB";
-  const carrierName = carrierMatch ? carrierMatch[1].charAt(0).toUpperCase() + carrierMatch[1].slice(1).toLowerCase() : "Verizon";
-  
-  return {
-    modelName,
-    seriesName,
-    storageOption,
-    carrierName,
-    brandName
+  updated.missingInfo = {
+    storage: !updated.storageOption,
+    carrier: !updated.carrierName,
+    model: !updated.modelName
   };
+  
+  return updated;
 }
 
 module.exports = {
   getDeviceEstimate,
-  extractDeviceInfo
+  extractDeviceInfo,
+  isDeviceInfoComplete,
+  getMissingInfoMessage,
+  updateDeviceInfo
 };
