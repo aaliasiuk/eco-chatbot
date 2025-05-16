@@ -1,4 +1,8 @@
 const axios = require('axios');
+const { SSMClient, GetParameterCommand } = require('@aws-sdk/client-ssm');
+
+// Initialize AWS clients
+const ssmClient = new SSMClient({ region: process.env.AWS_REGION || 'us-east-1' });
 
 /**
  * Get a price estimate for a device
@@ -45,8 +49,14 @@ async function getDeviceEstimate(deviceInfo) {
       }
     `;
     
+    // Get API endpoint from SSM Parameter Store (for flexibility across environments)
+    const endpointParam = await ssmClient.send(
+      new GetParameterCommand({ Name: '/ecoatm/api/graphql-endpoint' })
+    );
+    const endpoint = endpointParam.Parameter.Value || 'https://api-qa.ecoatm.com/omni/v1/graphql';
+    
     const response = await axios({
-      url: 'https://api-qa.ecoatm.com/omni/v1/graphql',
+      url: endpoint,
       method: 'post',
       data: {
         query
@@ -68,12 +78,29 @@ async function getDeviceEstimate(deviceInfo) {
 }
 
 /**
- * Extract device information from user message
- * @param {string} message - User message
+ * Extract device information from user message or Lex slots
+ * @param {Object} input - Either a string message or Lex slots
  * @returns {Object|null} - Extracted device info or null if not enough info
  */
-function extractDeviceInfo(message) {
-  // Simple extraction logic - in production, use NLP or more sophisticated parsing
+function extractDeviceInfo(input) {
+  // If input is from Lex slots, use that directly
+  if (typeof input === 'object' && input !== null) {
+    const { deviceBrand, deviceModel, storageSize, carrier } = input;
+    
+    if (deviceBrand && deviceModel) {
+      return {
+        modelName: deviceModel,
+        seriesName: deviceModel,
+        storageOption: storageSize || "128GB",
+        carrierName: carrier || "Verizon",
+        brandName: deviceBrand
+      };
+    }
+    return null;
+  }
+  
+  // Otherwise parse from message string
+  const message = input;
   const modelRegex = /(iphone|galaxy|pixel)\s*(\d+)(\s*pro)?(\s*max)?/i;
   const storageRegex = /(\d+)\s*(gb|tb)/i;
   const carrierRegex = /(verizon|at&t|t-mobile|sprint|unlocked)/i;
@@ -109,7 +136,22 @@ function extractDeviceInfo(message) {
   };
 }
 
+/**
+ * Format device estimate for response
+ * @param {Object} deviceInfo - Device information
+ * @param {Object} estimate - Estimate data from API
+ * @returns {string} - Formatted response
+ */
+function formatEstimateResponse(deviceInfo, estimate) {
+  if (!estimate || !estimate.offer) {
+    return `I'm sorry, I couldn't get an estimate for your ${deviceInfo.brandName} ${deviceInfo.modelName}.`;
+  }
+  
+  return `Based on the information provided, your ${deviceInfo.brandName} ${deviceInfo.modelName} (${deviceInfo.storageOption}, ${deviceInfo.carrierName}) is estimated to be worth $${estimate.offer}. This is an estimate for a device that powers on, has no screen damage, and no cracks. The actual offer may vary based on the condition of your device when assessed at an ecoATM kiosk.`;
+}
+
 module.exports = {
   getDeviceEstimate,
-  extractDeviceInfo
+  extractDeviceInfo,
+  formatEstimateResponse
 };

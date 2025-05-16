@@ -1,4 +1,5 @@
 const axios = require('axios');
+const AWS = require('aws-sdk');
 
 /**
  * Convert zip code to latitude and longitude using a geocoding service
@@ -30,7 +31,7 @@ async function zipCodeToCoordinates(zipCode) {
  * @param {number} longitude - The longitude
  * @returns {Promise<Array>} - Array of locations
  */
-async function getLocations(latitude, longitude) {
+/* async function getLocations(latitude, longitude) {
   try {
     const url = `https://ws.bullseyelocations.com/RestSearch.svc/DoSearch2?FillAttr=true&GetHoursForUpcomingWeek=true&Radius=1000&StartIndex=0&PageSize=20&LanguageCode=en&Latitude=${latitude}&Longitude=${longitude}&CountryId=1&InterfaceID=${process.env.BULLSEYE_INTERFACE_ID}&ClientId=${process.env.BULLSEYE_CLIENT_ID}&ApiKey=${process.env.BULLSEYE_API_KEY}`;
     
@@ -44,8 +45,14 @@ async function getLocations(latitude, longitude) {
     console.error('Error fetching locations:', error);
     throw error;
   }
+} */
+async function getLocations(latitude, longitude) {
+  const ssm = new AWS.SSM();
+  const apiKey = await ssm.getParameter({
+    Name: '/ecoatm/bullseye/api-key',
+    WithDecryption: true
+  }).promise();
 }
-
 /**
  * Find locations by zip code
  * @param {string} zipCode - The zip code to search
